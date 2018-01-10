@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AxClass xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
+	<Name>SalesTableEventHandler</Name>
+	<SourceCode>
+		<Declaration><![CDATA[
+/// <summary>
+/// Handles events raised by <c>SalesTable</c> form.
+/// </summary>
+public class SalesTableEventHandler
+{
+}
+]]></Declaration>
+		<Methods>
+			<Method>
+				<Name>SalesLine_OnInitialized</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// Post event handler for <c>SalesTable</c> <c>SalesLine</c> Initialized event.
+    /// </summary>
+    /// <param name=“_sender”></param>
+    /// <param name=“_e”></param>
+    [FormDataSourceEventHandler(formDataSourceStr(SalesTable, SalesLine), FormDataSourceEventType::Initialized)]
+    public static void SalesLine_OnInitialized(FormDataSource _sender, FormDataSourceEventArgs _e)
+    {
+        var overrides = SalesTableFormExtensionOverrides::construct();
+
+        _sender.object(fieldNum(SalesLine, ItemId)).registerOverrideMethod(methodStr(FormDataObject, jumpRef),
+            methodStr(SalesTableFormExtensionOverrides, itemId_OnJumpRef), overrides);
+ 
+        _sender.object(fieldNum(SalesLine, ItemId)).registerOverrideMethod(methodStr(FormDataObject, validate),
+            methodStr(SalesTableFormExtensionOverrides, itemId_OnValidate), overrides);
+ 
+        _sender.object(fieldNum(SalesLine, ItemId)).registerOverrideMethod(methodStr(FormDataObject, lookup),
+            methodStr(SalesTableFormExtensionOverrides, ItemId_OnLookup), overrides);
+    }
+
+]]></Source>
+			</Method>
+		</Methods>
+	</SourceCode>
+</AxClass>

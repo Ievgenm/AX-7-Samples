@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AxClass xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
+	<Name>SalesTableFormExtensionOverrides</Name>
+	<SourceCode>
+		<Declaration><![CDATA[
+/// <summary>
+/// Contains methods which are used to override <c>SalesLine</c> data source field methods.
+/// </summary>
+public class SalesTableFormExtensionOverrides
+{
+}
+]]></Declaration>
+		<Methods>
+			<Method>
+				<Name>new</Name>
+				<Source><![CDATA[
+    protected void new()
+    {
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>construct</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// Constructs a new instance of <c>SalesTableFormExtensionOverrides</c> class.
+    /// </summary>
+    /// <returns>
+    /// A <c>SalesTableFormExtensionOverrides</c> class.
+    /// </returns>
+    public static SalesTableFormExtensionOverrides construct()
+    {
+        return new SalesTableFormExtensionOverrides();
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>itemId_OnJumpRef</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// Provides the open main table functionality for an item.
+    /// </summary>
+    /// <param name ="_targetField"> The <c>FormDataObject</c> where the jumpRef is triggered.</param>
+    public void itemId_OnJumpRef(FormDataObject _targetField)
+    {
+        InventTable::jumpRefItemId(_targetField.getValue(), OpenMode::Edit);
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>itemId_OnValidate</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// Checks whether <c>ItemId</c> is valid.
+    /// </summary>
+    /// <param name = "_targetField"> The <c>FormDataObject</c> where the Validate is triggered.</param>
+    public boolean itemId_OnValidate(FormDataObject _targetField)
+    {
+        //emulate super() call. Comment out to skip.
+        boolean ret = _targetField.validate();
+ 
+        if (ret)
+        {
+            //custom validation here.
+        }
+ 
+        return ret;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>ItemId_OnLookup</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// Provides a lookup for the <c>InventTable</c> table
+    /// </summary>
+    /// <param name = "_callingControl">
+    /// The form string control object with which to perform the lookup.
+    /// </param>
+    public void ItemId_OnLookup(FormStringControl _callingControl)
+    {
+        SysTableLookup sysTableLookup = SysTableLookup::newParameters(tableNum(InventTable), _callingControl);
+
+        sysTableLookup.addLookupfield(fieldNum(InventTable, ItemId));
+        sysTableLookup.addLookupfield(fieldNum(InventTable, NameAlias));
+
+        sysTableLookup.performFormLookup();
+    }
+
+]]></Source>
+			</Method>
+		</Methods>
+	</SourceCode>
+</AxClass>
