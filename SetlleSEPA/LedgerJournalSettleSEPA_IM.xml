@@ -1,0 +1,543 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AxClass xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
+	<Name>LedgerJournalSettleSEPA_IM</Name>
+	<SourceCode>
+		<Declaration><![CDATA[
+public class LedgerJournalSettleSEPA_IM extends RunBaseBatch
+{
+    private const str code_166  = '166?';
+    private const str code_SVWZ = 'SVWZ+';
+    private const str separator =  '?'; 
+
+    private container avisCodeCon = 
+        ['Siehe Belgleitschreiben',
+         'Avis',
+         'Zahlungsavis'];
+
+    private container invoicesCodeCon = 
+        ['Rechnungsnummer',
+         'Rechnungs-Nr.',
+         'Rechnung-Nr.',
+         'Rechnung',
+         'RechNr.',
+         'RE-NR',
+         'RENR:',
+         'ReNr',
+         'Re.Nr.',
+         'RE'];
+
+    private container invoicesDelimiterCodeCon =
+        ['und',
+         ';',
+         ',',
+         '/',
+         ' '];
+
+    private container delimiterCodesToSkipCon = 
+        ['?21',
+         '?22',
+         '?23',
+         '?24',
+         '?25',
+         '?26',
+         '?27',
+         '?28',
+         '?29'];
+
+    LedgerJournalId       journalId;
+
+    #define.CurrentVersion(1)
+    #localmacro.CurrentList
+        journalId
+    #endmacro
+
+}
+]]></Declaration>
+		<Methods>
+			<Method>
+				<Name>parmJournalId</Name>
+				<Source><![CDATA[
+    public LedgerJournalId parmJournalId(LedgerJournalId _journalId = journalId)
+    {
+        journalId = _journalId;
+        return journalId;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>new</Name>
+				<Source><![CDATA[
+    protected void new()
+    {
+        super();
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>pack</Name>
+				<Source><![CDATA[
+    public container pack()
+    {
+        return [#CurrentVersion, #CurrentList];
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>run</Name>
+				<Source><![CDATA[
+    public void run()
+    {
+        #OCCRetryCount
+
+        if (! this.validate())
+        {
+            throw Exception::Error;
+        }
+
+        try
+        {
+            ttsbegin;
+
+            setPrefix(strFmt('Journal %1', journalId));
+
+            this.settleLines();
+
+            ttscommit;
+        }
+        #StandardRetryCatchBlock
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>settleLines</Name>
+				<Source><![CDATA[
+    private void settleLines()
+    {
+        int code_SVWZposition;
+        container invoicesCon;
+        LedgerJournalTrans ledgerJournalTrans;
+
+        while select ledgerJournalTrans
+            where ledgerJournalTrans.JournalNum == journalId
+               && ledgerJournalTrans.AccountType == LedgerJournalACType::Cust
+               && ledgerJournalTrans.OffsetTxt like code_166 + '*' //select only customer payments (:86:166?)
+        {
+            setPrefix(strFmt('Line %1', ledgerJournalTrans.LineNum));
+
+            if (this.areInvoiceDetailsInADifferentFile(ledgerJournalTrans.OffsetTxt))
+            {
+                info(strFmt('Invoice details are not included, trying to settle %1 amount', ledgerJournalTrans.amount()));
+                this.settleFullAmount(ledgerJournalTrans);
+            }
+            else
+            {
+                code_SVWZposition = this.getCode_SVWZposition(ledgerJournalTrans.OffsetTxt);
+
+                if (!code_SVWZposition)
+                {
+                    info(strFmt('%1 not found, skip the line', code_SVWZ));
+                    continue;
+                }
+
+                invoicesCon = this.getInvoices(ledgerJournalTrans.OffsetTxt, code_SVWZposition);
+                if (invoicesCon)
+                {
+                    info(strFmt('Invoices: %1 found', con2Str(invoicesCon)));
+                    this.settleInvoices(ledgerJournalTrans, invoicesCon);
+                }
+            }
+        }
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>getCode_SVWZposition</Name>
+				<Source><![CDATA[
+    private int getCode_SVWZposition(str _txt)
+    {
+        return strScan(_txt, code_SVWZ, 1, strLen(_txt));
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>areInvoiceDetailsInADifferentFile</Name>
+				<Source><![CDATA[
+    private boolean areInvoiceDetailsInADifferentFile(str _txt)
+    {
+        int len = strLen(_txt);
+
+        for (int i = 1; i <= conLen(avisCodeCon); i++)
+        {
+            if (strScan(_txt, conPeek(avisCodeCon, i), 1, len))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>settleFullAmount</Name>
+				<Source><![CDATA[
+    private void settleFullAmount(LedgerJournalTrans _ledgerJournalTrans)
+    {
+        CustTable       custTable = _ledgerJournalTrans.findCustTable();
+        CustTrans       custTrans;
+        CustTransOpen   custTransOpen;
+        AmountCur       transAmountToSettle;
+        AmountCur       amountToSettleTotal = -_ledgerJournalTrans.amount();
+        AmountCur       amountSettled;
+        AmountCur       transRemainAmount;
+
+        SpecTransExecutionContext specTransExecutionContext = SpecTransExecutionContext::newFromSource(custTable);
+        SpecTransManager specTransManager = SpecTransManager::construct(_ledgerJournalTrans);
+
+        while select custTransOpen
+            exists join custTrans
+                where custTransOpen.RefRecId == custTrans.RecId
+                    && custTrans.AccountNum   == custTable.AccountNum
+                    && custTrans.CurrencyCode == _ledgerJournalTrans.CurrencyCode
+        {
+            transRemainAmount = CustVendTransOpenData::construct(custTransOpen).findRemainingAmountCur();
+            
+            if (transRemainAmount > amountToSettleTotal - amountSettled)
+            {
+                transAmountToSettle =  amountToSettleTotal - amountSettled;
+            }
+            else
+            {
+                transAmountToSettle = custTransOpen.AmountCur;
+            }
+
+            specTransManager.insert(custTransOpen.DataAreaId, custTransOpen.TableId, custTransOpen.RecId, transAmountToSettle, _ledgerJournalTrans.CurrencyCode);
+            amountSettled += transAmountToSettle;
+
+            if (amountSettled >= amountToSettleTotal)
+            {
+                break;
+            }
+        }
+            
+        //Settle
+        CustTrans::settleTransaction(specTransExecutionContext, CustTransSettleTransactionParameters::construct());
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>settleInvoices</Name>
+				<Source><![CDATA[
+    private void settleInvoices(LedgerJournalTrans _ledgerJournalTrans, container _invoicesCon)
+    {
+        CustTable       custTable = _ledgerJournalTrans.findCustTable();
+        CustTrans       custTrans;
+        CustTransOpen   custTransOpen;
+        boolean         invoiceFound;
+        InvoiceId       invoiceId;
+
+        SpecTransExecutionContext specTransExecutionContext = SpecTransExecutionContext::newFromSource(custTable);
+        SpecTransManager specTransManager = SpecTransManager::construct(_ledgerJournalTrans);
+
+        for (int i = 1; i <= conLen(_invoicesCon); i++)
+        {
+            invoiceFound = false;
+            invoiceId = conPeek(_invoicesCon, i);
+
+            while select DataAreaId, TableId, RecId, AmountCur from custTransOpen
+                join Invoice from custTrans
+                    where custTransOpen.RefRecId == custTrans.RecId
+                       && custTrans.AccountNum   == custTable.AccountNum
+                       && custTrans.CurrencyCode == _ledgerJournalTrans.CurrencyCode
+                       && custTrans.Invoice      == invoiceId
+                {
+                    info(strFmt('Invoice %1 marked', custTrans.Invoice));
+                    specTransManager.insert(custTransOpen.DataAreaId, custTransOpen.TableId, custTransOpen.RecId, custTransOpen.AmountCur, _ledgerJournalTrans.CurrencyCode);
+                    invoiceFound = true;
+                }
+            
+            if (!invoiceFound)
+            {
+                info(strFmt('Invoice %1 has not been matched', invoiceId));
+            }
+        }
+
+        //Settle
+        CustTrans::settleTransaction(specTransExecutionContext, CustTransSettleTransactionParameters::construct());
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>getInvoices</Name>
+				<Source><![CDATA[
+    private container getInvoices(str _txt, int _code_SVWZposition)
+    {
+        container invoicesCon;
+        str invoiceStringToParse = subStr(_txt, _code_SVWZposition, strLen(_txt));
+
+        str invoiceStr = this.getInvoiceString(invoiceStringToParse);
+
+        if (invoiceStr)
+        {
+            invoicesCon = this.getInvoicesFromInvoiceString(invoiceStr);
+        }
+
+        return invoicesCon;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>getInvoiceString</Name>
+				<Source><![CDATA[
+    private str getInvoiceString(str _txt)
+    {
+        int searchStartPosition = 1;
+        int nextFieldCodePosition;
+        boolean foundFieldCode;
+        str res = this.excludeDelimiterCodes(_txt);
+        
+        do 
+        { 
+            nextFieldCodePosition = strScan(res, separator, searchStartPosition, strLen(res));
+            if (nextFieldCodePosition)
+            {
+                if (this.IsFieldCode(subStr(res, nextFieldCodePosition + 1, 2)))
+                {
+                    foundFieldCode = true;
+                }
+                else
+                {
+                    searchStartPosition = nextFieldCodePosition + 1;
+                }
+            }
+            else
+            {
+                nextFieldCodePosition = strLen(res);
+                //exit loop
+                foundFieldCode = true;
+            }
+        }
+        while (!foundFieldCode);
+
+        res = subStr(res, 1, nextFieldCodePosition - 1);
+
+        return res;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>excludeDelimiterCodes</Name>
+				<Source><![CDATA[
+    private str excludeDelimiterCodes(str _txt)
+    {
+        str res = strReplace(_txt, '\n', '');
+        res = strReplace(res, '\r', '');
+
+        for (int i = 1; i <= conLen(delimiterCodesToSkipCon); i++)
+        {
+            res = strReplace(res, conPeek(delimiterCodesToSkipCon, i), '');
+        }
+
+        return res;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>getInvoicesFromInvoiceString</Name>
+				<Source><![CDATA[
+    private container getInvoicesFromInvoiceString(str _txt)
+    {
+        container invoicesCon;
+
+        int len = strLen(_txt);
+        str invoiceStartCode;
+        int invoiceStartPosition;
+        str invoiceStr;
+
+        for (int i = 1; i <= conLen(invoicesCodeCon); i++)
+        {
+            invoiceStartCode = conPeek(invoicesCodeCon, i);
+            invoiceStartPosition = strScan(_txt, invoiceStartCode, 1, len);
+            if (invoiceStartPosition)
+            {
+                info(strFmt('Invoice start code %1', invoiceStartCode));
+                invoiceStr = subStr(_txt, invoiceStartPosition + strLen(invoiceStartCode), len - (invoiceStartPosition + strLen(invoiceStartCode)));
+                // remove invoice start code
+                invoiceStr = strReplace(invoiceStr, invoiceStartCode, '');
+                break;
+            }
+        }
+
+        if (invoiceStr)
+        {
+            invoicesCon = this.parseInvoices(invoiceStr);
+        }
+
+        return invoicesCon;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>parseInvoices</Name>
+				<Source><![CDATA[
+    private container parseInvoices(str _txt)
+    {
+        int len = strLen(_txt);
+        str delimiter;
+        int delimiterStartPosition;
+        List invoicesList;
+        container invoicesCon;
+        str invoice;
+
+        for (int i = 1; i <= conLen(invoicesDelimiterCodeCon); i++)
+        {
+            delimiter = conPeek(invoicesDelimiterCodeCon, i);
+            delimiterStartPosition = strScan(_txt, delimiter, 1, len);
+            if (delimiterStartPosition)
+            {
+                info(strFmt('Delimiter %1 found', delimiter));
+                invoicesList = strSplit(_txt, delimiter);
+                break;
+            }
+        }
+
+        if (invoicesList)
+        {
+            ListEnumerator le = invoicesList.getEnumerator();
+            
+            while (le.moveNext())
+            {
+                invoice = strRTrim(strLTrim(le.current()));
+                if (invoice)
+                {
+                    invoicesCon += invoice;
+                }
+            }
+        }
+        else
+        {
+            invoicesCon += strRTrim(strLTrim(_txt));
+        }
+
+        return invoicesCon;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>isFieldCode</Name>
+				<Source><![CDATA[
+    private boolean isFieldCode(str _value)
+    {
+        switch (_value)
+        {
+            case '00':
+            case '10':
+            case '20':
+            case '60':
+            case '61':
+            case '62':
+            case '63':
+            case '30':
+            case '31':
+            case '32':
+            case '33':
+            case '34':
+                return true;
+            default:
+                return false;
+        }
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>unpack</Name>
+				<Source><![CDATA[
+    public boolean unpack(container _packedClass)
+    {
+        Version version = RunBase::getVersion(_packedClass);
+
+        switch (version)
+        {
+            case #CurrentVersion:
+                [version, #CurrentList] = _packedClass;
+                break;
+            default:
+                return false;
+        }
+
+        return true;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>construct</Name>
+				<Source><![CDATA[
+    public static LedgerJournalSettleSEPA_IM construct()
+    {
+        return new LedgerJournalSettleSEPA_IM();
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>description</Name>
+				<Source><![CDATA[
+    // Here goes a description of the class
+    public static ClassDescription description()
+    {
+        return 'Settle SEPA';
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>main</Name>
+				<Source><![CDATA[
+    static void main(Args _args)
+    {
+        LedgerJournalSettleSEPA_IM settle = LedgerJournalSettleSEPA_IM::construct();
+
+        if (_args && _args.record() && _args.dataset() == tableNum(LedgerJournalTable))
+        {
+            LedgerJournalTable ledgerJournalTable = _args.record();
+            settle.parmJournalId(ledgerJournalTable.JournalNum);
+        }
+        else
+        {
+            throw error(Error::missingRecord(tableStr(LedgerJournalTable)));
+        }
+
+        settle.runOperation();
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>canRunInNewSession</Name>
+				<Source><![CDATA[
+    protected boolean canRunInNewSession()
+    {
+        return false;
+    }
+
+]]></Source>
+			</Method>
+		</Methods>
+	</SourceCode>
+</AxClass>
